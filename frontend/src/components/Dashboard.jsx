@@ -75,7 +75,7 @@ function Dashboard() {
       <header className="dashboard-header">
         <div className="header-content">
           <div className="header-title">
-            <h1>🎬 StreamPulse</h1>
+            <h1>🎬 Stream Pulse</h1>
             <p className="subtitle">Real-Time Content Analytics</p>
           </div>
           <div className="header-info">
