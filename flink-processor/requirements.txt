@@ -1,0 +1,17 @@
+# Flink Stream Processing
+apache-flink==1.18.0
+
+# Kafka Integration
+kafka-python==2.0.2
+
+# Avro Serialization
+avro-python3==1.10.2
+
+# Database
+psycopg2-binary==2.9.9
+
+# Configuration
+python-dotenv==1.0.0
+
+# Utilities
+python-dateutil==2.8.2

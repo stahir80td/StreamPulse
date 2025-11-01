@@ -1,0 +1,136 @@
+{
+  "type": "record",
+  "name": "ContentDownloadEvent",
+  "namespace": "com.streampulse.events",
+  "doc": "Event representing a user downloading digital content (movie, music, app, etc.)",
+  "fields": [
+    {
+      "name": "event_id",
+      "type": "string",
+      "doc": "Unique identifier for this event (UUID)"
+    },
+    {
+      "name": "timestamp",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Event timestamp in milliseconds since epoch"
+    },
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "Unique user identifier (anonymized)"
+    },
+    {
+      "name": "content",
+      "type": {
+        "type": "record",
+        "name": "Content",
+        "doc": "Information about the content being downloaded",
+        "fields": [
+          {
+            "name": "content_id",
+            "type": "string",
+            "doc": "Unique content identifier (e.g., mov_avengers_2)"
+          },
+          {
+            "name": "title",
+            "type": "string",
+            "doc": "Human-readable content title"
+          },
+          {
+            "name": "type",
+            "type": "string",
+            "doc": "Content type: movie, tv_show, music, app, book"
+          },
+          {
+            "name": "category",
+            "type": "string",
+            "doc": "Content category: action, comedy, drama, music, etc."
+          },
+          {
+            "name": "size_mb",
+            "type": "int",
+            "doc": "Content size in megabytes"
+          },
+          {
+            "name": "price",
+            "type": "float",
+            "doc": "Content price in USD"
+          }
+        ]
+      }
+    },
+    {
+      "name": "download",
+      "type": {
+        "type": "record",
+        "name": "Download",
+        "doc": "Download-specific metrics",
+        "fields": [
+          {
+            "name": "status",
+            "type": "string",
+            "doc": "Download status: success, failed, cancelled"
+          },
+          {
+            "name": "duration_seconds",
+            "type": "int",
+            "doc": "How long the download took in seconds"
+          },
+          {
+            "name": "speed_mbps",
+            "type": "float",
+            "doc": "Average download speed in megabits per second"
+          },
+          {
+            "name": "error_code",
+            "type": ["null", "string"],
+            "default": null,
+            "doc": "Error code if download failed: cdn_timeout, network_error, auth_failed, disk_full"
+          },
+          {
+            "name": "error_message",
+            "type": ["null", "string"],
+            "default": null,
+            "doc": "Human-readable error message"
+          }
+        ]
+      }
+    },
+    {
+      "name": "user_context",
+      "type": {
+        "type": "record",
+        "name": "UserContext",
+        "doc": "User's device and network context",
+        "fields": [
+          {
+            "name": "region",
+            "type": "string",
+            "doc": "Geographic region: US-California, EU-London, ASIA-Tokyo, etc."
+          },
+          {
+            "name": "city",
+            "type": "string",
+            "doc": "City name"
+          },
+          {
+            "name": "device",
+            "type": "string",
+            "doc": "Device type: iPhone 15 Pro, iPad Pro, Apple TV 4K, MacBook Pro"
+          },
+          {
+            "name": "os_version",
+            "type": "string",
+            "doc": "Operating system version: iOS 18.1, iPadOS 18, tvOS 18, macOS 14"
+          },
+          {
+            "name": "connection_type",
+            "type": "string",
+            "doc": "Network connection: wifi, 5g, 4g, ethernet"
+          }
+        ]
+      }
+    }
+  ]
+}
