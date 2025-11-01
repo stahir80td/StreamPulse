@@ -7,9 +7,8 @@ Does the same windowing, aggregation, and anomaly detection
 import os
 import sys
 import time
-import json
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from typing import Dict, List, Any
 from kafka import KafkaConsumer
@@ -40,7 +39,8 @@ class Window:
     
     def should_close(self, current_time: datetime) -> bool:
         """Check if window should be closed"""
-        return current_time >= self.window_end and not self.is_closed
+        # Add 5 second grace period to ensure we capture late events
+        return current_time >= (self.window_end + timedelta(seconds=5)) and not self.is_closed
     
     def close(self):
         """Mark window as closed"""
@@ -120,14 +120,14 @@ class StreamProcessor:
         timestamp = event['timestamp']
         
         if isinstance(timestamp, int):
-            # Unix timestamp in milliseconds
-            event_time = datetime.utcfromtimestamp(timestamp / 1000)
+            # Unix timestamp in milliseconds - FIXED: Use UTC timezone
+            event_time = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc).replace(tzinfo=None)
         elif isinstance(timestamp, str):
             # ISO string format
-            event_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            event_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).replace(tzinfo=None)
         else:
-            # Fallback to current time
-            event_time = datetime.utcnow()
+            # Fallback to current time - FIXED: Use UTC
+            event_time = datetime.now(timezone.utc).replace(tzinfo=None)
         
         window_start = self.get_window_start(event_time)
         
@@ -142,22 +142,42 @@ class StreamProcessor:
     
     def close_windows(self):
         """Close windows that are past their end time"""
-        current_time = datetime.utcnow()
+        # FIXED: Use UTC timezone consistently
+        current_time = datetime.now(timezone.utc).replace(tzinfo=None)
         windows_to_close = []
         
+        # Debug output
         with self.window_lock:
-            for window_start, window in self.windows.items():
-                if window.should_close(current_time):
-                    windows_to_close.append(window_start)
+            if len(self.windows) > 0:
+                print(f"🔍 Checking windows. Current time: {current_time.strftime('%H:%M:%S')} UTC")
+                print(f"🔍 Windows in memory: {len(self.windows)}")
+                
+                for window_start, window in self.windows.items():
+                    time_until_close = (window.window_end + timedelta(seconds=5)) - current_time
+                    should_close = window.should_close(current_time)
+                    print(f"   Window {window_start.strftime('%H:%M:%S')}-{window.window_end.strftime('%H:%M:%S')}: "
+                          f"{len(window.events)} events, closes in {time_until_close.total_seconds():.0f}s, "
+                          f"should_close={should_close}")
+                    
+                    if should_close:
+                        windows_to_close.append(window_start)
         
         # Process closed windows
+        if windows_to_close:
+            print(f"🚀 Closing {len(windows_to_close)} windows...")
+        
         for window_start in windows_to_close:
             with self.window_lock:
                 window = self.windows.pop(window_start)
             
+            window.close()
+            
             if window.events:
+                print(f"   Processing window {window_start.strftime('%H:%M:%S')} with {len(window.events)} events...")
                 self.aggregate_window(window)
                 self.total_windows_flushed += 1
+            else:
+                print(f"   Skipping empty window {window_start.strftime('%H:%M:%S')}")
     
     def aggregate_window(self, window: Window):
         """Aggregate events in a window and write to database"""
@@ -178,7 +198,7 @@ class StreamProcessor:
             
             stats['download_count'] += 1
             stats['title'] = event['content']['title']
-            stats['total_size_gb'] += event['content']['size_gb']
+            stats['total_size_gb'] += event['content']['size_mb'] / 1024
             
             if event['download']['status'] == 'success':
                 stats['successful_downloads'] += 1
@@ -191,14 +211,16 @@ class StreamProcessor:
             'successful_downloads': 0,
             'failed_downloads': 0,
             'total_speed': 0,
-            'speed_count': 0
+            'speed_count': 0,
+            'total_size_gb': 0
         })
         
         for event in events:
-            region = event['user']['region']
+            region = event['user_context']['region']
             health = region_health[region]
             
             health['total_downloads'] += 1
+            health['total_size_gb'] += event['content']['size_mb'] / 1024
             
             if event['download']['status'] == 'success':
                 health['successful_downloads'] += 1
@@ -212,16 +234,17 @@ class StreamProcessor:
         device_stats = defaultdict(lambda: {
             'download_count': 0,
             'successful_downloads': 0,
-            'avg_speed': 0,
             'total_speed': 0,
-            'speed_count': 0
+            'speed_count': 0,
+            'total_size_gb': 0
         })
         
         for event in events:
-            device = event['user']['device_type']
+            device = event['user_context']['device']
             stats = device_stats[device]
             
             stats['download_count'] += 1
+            stats['total_size_gb'] += event['content']['size_mb'] / 1024
             
             if event['download']['status'] == 'success':
                 stats['successful_downloads'] += 1
@@ -272,12 +295,13 @@ class StreamProcessor:
                     health['failed_downloads'],
                     round(success_rate, 4),
                     round(avg_speed, 2),
+                    round(health['total_size_gb'], 2),
                     window.window_start,
                     window.window_end
                 ))
                 
                 # Check for anomalies (success rate < 90%)
-                if success_rate < 0.90:
+                if success_rate < 0.90 and health['total_downloads'] >= 5:
                     alerts.append((
                         'HIGH_ERROR_RATE',
                         'WARNING' if success_rate >= 0.85 else 'CRITICAL',
@@ -285,15 +309,16 @@ class StreamProcessor:
                         region,
                         'error_rate',
                         1 - success_rate,
-                        0.10
+                        0.10,
+                        window.window_start
                     ))
             
             if region_rows:
                 execute_batch(cursor, """
                     INSERT INTO region_health 
                     (region, total_downloads, successful_downloads, failed_downloads,
-                     success_rate, avg_speed_mbps, window_start, window_end)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                     success_rate, avg_speed_mbps, total_size_gb, window_start, window_end)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (region, window_start) DO NOTHING
                 """, region_rows)
                 print(f"✅ Wrote {len(region_rows)} records to region_health")
@@ -302,8 +327,8 @@ class StreamProcessor:
             if alerts:
                 execute_batch(cursor, """
                     INSERT INTO alerts 
-                    (alert_type, severity, message, region, metric_name, metric_value, threshold_value)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (alert_type, severity, message, region, metric_name, metric_value, threshold_value, window_start)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, alerts)
                 print(f"⚠️  Created {len(alerts)} alerts")
             
@@ -312,11 +337,20 @@ class StreamProcessor:
             for device, stats in device_stats.items():
                 avg_speed = stats['total_speed'] / stats['speed_count'] if stats['speed_count'] > 0 else 0
                 
+                # Get a sample OS version from events (simplified)
+                os_version = "Unknown"
+                for event in events:
+                    if event['user_context']['device'] == device:
+                        os_version = event['user_context']['os_version']
+                        break
+                
                 device_rows.append((
                     device,
+                    os_version,
                     stats['download_count'],
                     stats['successful_downloads'],
                     round(avg_speed, 2),
+                    round(stats['total_size_gb'], 2),
                     window.window_start,
                     window.window_end
                 ))
@@ -324,10 +358,10 @@ class StreamProcessor:
             if device_rows:
                 execute_batch(cursor, """
                     INSERT INTO device_stats 
-                    (device_type, download_count, successful_downloads, avg_speed_mbps,
-                     window_start, window_end)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (device_type, window_start) DO NOTHING
+                    (device, os_version, total_downloads, successful_downloads, avg_speed_mbps,
+                     total_size_gb, window_start, window_end)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (device, os_version, window_start) DO NOTHING
                 """, device_rows)
                 print(f"✅ Wrote {len(device_rows)} records to device_stats")
             
@@ -344,7 +378,10 @@ class StreamProcessor:
         print("🔄 Window flusher thread started")
         while True:
             time.sleep(5)  # Check every 5 seconds
-            self.close_windows()
+            try:
+                self.close_windows()
+            except Exception as e:
+                print(f"❌ Error in window flusher: {e}")
     
     def run(self):
         """Main processing loop"""
@@ -377,6 +414,7 @@ class StreamProcessor:
         
         finally:
             # Close final windows
+            print("🔄 Closing remaining windows...")
             self.close_windows()
             
             # Cleanup

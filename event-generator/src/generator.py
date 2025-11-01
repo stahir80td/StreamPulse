@@ -4,7 +4,7 @@ Event Generator - Produces realistic content download events to Kafka
 
 import time
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from faker import Faker
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
@@ -76,10 +76,10 @@ class ContentEventGenerator:
             weights=[90, 8, 2]
         )[0]
         
-        # Build event
+        # Build event - FIXED: Use timezone-aware UTC datetime
         event = {
             "event_id": fake.uuid4(),
-            "timestamp": int(datetime.utcnow().timestamp() * 1000),
+            "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
             "user_id": fake.uuid4(),
             "content": {
                 "content_id": content.id,
@@ -159,7 +159,7 @@ class ContentEventGenerator:
         print("🚀 StreamPulse Event Generator")
         print("="*60)
         print(f"📊 Target: {config.EVENTS_PER_MINUTE} events/minute")
-        print(f"📍 Topic: {config.KAFKA_TOPIC}")
+        print(f"📝 Topic: {config.KAFKA_TOPIC}")
         print(f"🔐 Authentication: {'Enabled' if config.KAFKA_USERNAME else 'Disabled'}")
         print("="*60 + "\n")
         
@@ -186,7 +186,7 @@ class ContentEventGenerator:
                 time.sleep(sleep_seconds)
                 
         except KeyboardInterrupt:
-            print(f"\n\n⏹️  Stopped. Total events sent: {event_count}")
+            print(f"\n\nℹ️  Stopped. Total events sent: {event_count}")
             self.producer.close()
         except Exception as e:
             print(f"\n❌ Error: {e}")
