@@ -1,6 +1,7 @@
 -- StreamPulse Database Schema
 -- PostgreSQL 14+ compatible
 -- Neon serverless PostgreSQL optimized
+-- Updated: 2025-11-01 - Added total_size_gb columns
 
 -- ============================================================================
 -- Table: content_stats
@@ -15,6 +16,7 @@ CREATE TABLE IF NOT EXISTS content_stats (
     download_count INTEGER NOT NULL DEFAULT 0,
     successful_downloads INTEGER NOT NULL DEFAULT 0,
     failed_downloads INTEGER NOT NULL DEFAULT 0,
+    total_size_gb NUMERIC(10,2) DEFAULT 0,  -- ADDED: Track data transferred
     window_start TIMESTAMP NOT NULL,
     window_end TIMESTAMP NOT NULL,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -47,6 +49,7 @@ CREATE TABLE IF NOT EXISTS region_health (
     success_rate FLOAT NOT NULL DEFAULT 0.0,
     avg_speed_mbps FLOAT NOT NULL DEFAULT 0.0,
     avg_duration_seconds FLOAT NOT NULL DEFAULT 0.0,
+    total_size_gb NUMERIC(10,2) DEFAULT 0,  -- ADDED: Regional bandwidth tracking
     window_start TIMESTAMP NOT NULL,
     window_end TIMESTAMP NOT NULL,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -142,6 +145,7 @@ CREATE TABLE IF NOT EXISTS device_stats (
     successful_downloads INTEGER NOT NULL DEFAULT 0,
     failed_downloads INTEGER NOT NULL DEFAULT 0,
     avg_speed_mbps FLOAT NOT NULL DEFAULT 0.0,
+    total_size_gb NUMERIC(10,2) DEFAULT 0,  -- ADDED: Device bandwidth tracking
     window_start TIMESTAMP NOT NULL,
     window_end TIMESTAMP NOT NULL,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -221,26 +225,33 @@ $$ LANGUAGE plpgsql;
 -- ============================================================================
 
 -- Insert sample content stats
-INSERT INTO content_stats (content_id, title, download_count, successful_downloads, failed_downloads, window_start, window_end)
+INSERT INTO content_stats (content_id, title, download_count, successful_downloads, failed_downloads, total_size_gb, window_start, window_end)
 VALUES 
-    ('mov_avengers_2', 'Avengers: Endgame 2', 150, 140, 10, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes'),
-    ('mov_taylor_swift', 'Taylor Swift: Eras Tour', 90, 85, 5, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes'),
-    ('mov_batman', 'The Batman Returns', 45, 43, 2, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes')
+    ('mov_avengers_2', 'Avengers: Endgame 2', 150, 140, 10, 4.5, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes'),
+    ('mov_taylor_swift', 'Taylor Swift: Eras Tour', 90, 85, 5, 3.2, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes'),
+    ('mov_batman', 'The Batman Returns', 45, 43, 2, 1.8, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes')
 ON CONFLICT (content_id, window_start) DO NOTHING;
 
 -- Insert sample region health
-INSERT INTO region_health (region, total_downloads, successful_downloads, failed_downloads, success_rate, avg_speed_mbps, avg_duration_seconds, window_start, window_end)
+INSERT INTO region_health (region, total_downloads, successful_downloads, failed_downloads, success_rate, avg_speed_mbps, avg_duration_seconds, total_size_gb, window_start, window_end)
 VALUES 
-    ('US-California', 120, 110, 10, 0.917, 35.5, 118.0, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes'),
-    ('EU-London', 80, 70, 10, 0.875, 28.3, 145.0, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes'),
-    ('ASIA-Tokyo', 65, 60, 5, 0.923, 32.1, 125.0, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes')
+    ('US-California', 120, 110, 10, 0.917, 35.5, 118.0, 5.2, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes'),
+    ('EU-London', 80, 70, 10, 0.875, 28.3, 145.0, 3.8, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes'),
+    ('ASIA-Tokyo', 65, 60, 5, 0.923, 32.1, 125.0, 2.9, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes')
 ON CONFLICT (region, window_start) DO NOTHING;
 
 -- Insert sample alert
 INSERT INTO alerts (alert_type, severity, message, region, metric_name, metric_value, threshold_value, window_start)
 VALUES 
-    ('HIGH_ERROR_RATE', 'WARNING', 'Download error rate above threshold in EU-London', 'EU-London', 'error_rate', 0.125, 0.10, NOW() - INTERVAL '5 minutes')
-ON CONFLICT DO NOTHING;
+    ('HIGH_ERROR_RATE', 'WARNING', 'Download error rate above threshold in EU-London', 'EU-London', 'error_rate', 0.125, 0.10, NOW() - INTERVAL '5 minutes');
+
+-- Insert sample device stats
+INSERT INTO device_stats (device, os_version, total_downloads, successful_downloads, failed_downloads, avg_speed_mbps, total_size_gb, window_start, window_end)
+VALUES 
+    ('iPhone', 'iOS 17.2', 100, 95, 5, 38.5, 3.5, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes'),
+    ('iPad', 'iPadOS 17.2', 75, 72, 3, 35.2, 2.8, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes'),
+    ('Mac', 'macOS 14.2', 50, 48, 2, 42.8, 2.1, NOW() - INTERVAL '5 minutes', NOW() - INTERVAL '4 minutes')
+ON CONFLICT (device, os_version, window_start) DO NOTHING;
 
 -- ============================================================================
 -- Views for common queries
@@ -254,6 +265,7 @@ SELECT
     SUM(download_count) as total_downloads,
     SUM(successful_downloads) as successful_downloads,
     SUM(failed_downloads) as failed_downloads,
+    SUM(total_size_gb) as total_size_gb,
     ROUND(AVG(CAST(successful_downloads AS FLOAT) / NULLIF(download_count, 0)), 3) as avg_success_rate
 FROM content_stats
 WHERE window_start >= NOW() - INTERVAL '5 minutes'
@@ -265,6 +277,7 @@ CREATE OR REPLACE VIEW v_latest_region_health AS
 SELECT 
     region,
     SUM(total_downloads) as total_downloads,
+    SUM(total_size_gb) as total_bandwidth_gb,
     ROUND(AVG(success_rate), 3) as avg_success_rate,
     ROUND(AVG(avg_speed_mbps), 1) as avg_speed_mbps,
     CASE 

@@ -1,178 +1,114 @@
 """
-Database Connection Pool and Utilities
+Database connection and utilities
 """
 
 import psycopg2
 from psycopg2 import pool
-from psycopg2.extras import RealDictCursor
-from contextlib import contextmanager
-from config import config
+from typing import Optional, List, Dict, Any
+
+from .config import Config
+
+config = Config()
+
+# Create connection pool
+db_pool: Optional[psycopg2.pool.SimpleConnectionPool] = None
 
 
-class DatabasePool:
-    """PostgreSQL connection pool"""
+def init_db_pool():
+    """Initialize database connection pool"""
+    global db_pool
     
-    _instance = None
-    _pool = None
+    if db_pool is None:
+        db_pool = psycopg2.pool.SimpleConnectionPool(
+            minconn=1,
+            maxconn=10,
+            host=config.PG_HOST,
+            port=config.PG_PORT,
+            database=config.PG_DATABASE,
+            user=config.PG_USER,
+            password=config.PG_PASSWORD,
+            sslmode=config.PG_SSLMODE
+        )
     
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(DatabasePool, cls).__new__(cls)
-            cls._instance._initialize_pool()
-        return cls._instance
-    
-    def _initialize_pool(self):
-        """Initialize connection pool"""
-        try:
-            self._pool = psycopg2.pool.SimpleConnectionPool(
-                minconn=1,
-                maxconn=10,
-                **config.get_connection_params()
-            )
-            print("✅ Database connection pool initialized")
-        except Exception as e:
-            print(f"❌ Failed to initialize database pool: {e}")
-            raise
-    
-    @contextmanager
-    def get_connection(self):
-        """
-        Get database connection from pool (context manager)
-        
-        Usage:
-            with db_pool.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM table")
-        """
-        conn = None
-        try:
-            conn = self._pool.getconn()
-            yield conn
-            conn.commit()
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            raise e
-        finally:
-            if conn:
-                self._pool.putconn(conn)
-    
-    @contextmanager
-    def get_cursor(self, cursor_factory=RealDictCursor):
-        """
-        Get database cursor (context manager)
-        
-        Usage:
-            with db_pool.get_cursor() as cursor:
-                cursor.execute("SELECT * FROM table")
-                results = cursor.fetchall()
-        """
-        with self.get_connection() as conn:
-            cursor = conn.cursor(cursor_factory=cursor_factory)
-            try:
-                yield cursor
-            finally:
-                cursor.close()
-    
-    def close_all(self):
-        """Close all connections in pool"""
-        if self._pool:
-            self._pool.closeall()
-            print("🔒 Database connection pool closed")
+    return db_pool
 
 
-# Singleton instance
-db_pool = DatabasePool()
+def get_db_connection():
+    """Get connection from pool"""
+    if db_pool is None:
+        init_db_pool()
+    
+    return db_pool.getconn()
 
 
-# Helper functions for common queries
+def release_db_connection(conn):
+    """Release connection back to pool"""
+    if db_pool:
+        db_pool.putconn(conn)
 
-def execute_query(query: str, params: tuple = None, fetch_one: bool = False):
+
+def execute_query(query: str, params: tuple = None, fetch_one: bool = False) -> List[Dict[str, Any]]:
     """
-    Execute query and return results
+    Execute a SELECT query and return results as list of dicts
     
     Args:
         query: SQL query string
-        params: Query parameters tuple
-        fetch_one: If True, return single result; if False, return all results
+        params: Query parameters (optional)
+        fetch_one: If True, return single dict instead of list
     
     Returns:
-        Query results as list of dicts or single dict
+        List of dictionaries with column names as keys (or single dict if fetch_one=True)
     """
-    with db_pool.get_cursor() as cursor:
-        cursor.execute(query, params)
-        
-        if fetch_one:
-            return cursor.fetchone()
-        else:
-            return cursor.fetchall()
-
-
-def execute_insert(query: str, params: tuple = None, returning: bool = False):
-    """
-    Execute INSERT query
-    
-    Args:
-        query: SQL INSERT query string
-        params: Query parameters tuple
-        returning: If True, return inserted row
-    
-    Returns:
-        Inserted row if returning=True, else None
-    """
-    with db_pool.get_cursor() as cursor:
-        cursor.execute(query, params)
-        
-        if returning:
-            return cursor.fetchone()
-        
-        return None
-
-
-def execute_update(query: str, params: tuple = None):
-    """
-    Execute UPDATE query
-    
-    Args:
-        query: SQL UPDATE query string
-        params: Query parameters tuple
-    
-    Returns:
-        Number of rows affected
-    """
-    with db_pool.get_cursor() as cursor:
-        cursor.execute(query, params)
-        return cursor.rowcount
-
-
-def execute_delete(query: str, params: tuple = None):
-    """
-    Execute DELETE query
-    
-    Args:
-        query: SQL DELETE query string
-        params: Query parameters tuple
-    
-    Returns:
-        Number of rows deleted
-    """
-    with db_pool.get_cursor() as cursor:
-        cursor.execute(query, params)
-        return cursor.rowcount
-
-
-def check_database_health():
-    """
-    Check database connection health
-    
-    Returns:
-        True if healthy, False otherwise
-    """
+    conn = None
     try:
-        with db_pool.get_cursor() as cursor:
-            cursor.execute("SELECT 1")
-            result = cursor.fetchone()
-            return result is not None
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        if params:
+            cursor.execute(query, params)
+        else:
+            cursor.execute(query)
+        
+        # Get column names
+        columns = [desc[0] for desc in cursor.description] if cursor.description else []
+        
+        # Fetch rows
+        if fetch_one:
+            row = cursor.fetchone()
+            result = dict(zip(columns, row)) if row else None
+        else:
+            rows = cursor.fetchall()
+            result = [dict(zip(columns, row)) for row in rows]
+        
+        cursor.close()
+        return result
+        
     except Exception as e:
-        print(f"❌ Database health check failed: {e}")
+        print(f"Query execution error: {e}")
+        raise
+    
+    finally:
+        if conn:
+            release_db_connection(conn)
+
+
+def check_database_health() -> bool:
+    """Check if database is accessible"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.close()
+        release_db_connection(conn)
+        return True
+    except Exception as e:
+        print(f"Database health check failed: {e}")
         return False
+
+
+def close_db_pool():
+    """Close all connections in pool"""
+    global db_pool
+    if db_pool:
+        db_pool.closeall()
+        db_pool = None
