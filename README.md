@@ -131,8 +131,6 @@ cd frontend && npm start
 **Dashboard:** http://localhost:3000  
 **API Docs:** http://localhost:8000/docs
 
-For detailed setup instructions, see [QUICK_START.md](QUICK_START.md).
-
 ---
 
 ## Project Structure
@@ -279,7 +277,7 @@ See [sql/init.sql](sql/init.sql) for complete schema.
 
 ### Environment Variables
 
-All services use `.env` files for configuration. See [ENV_CONFIGURATION.md](ENV_CONFIGURATION.md) for complete guide.
+All services use `.env` files for configuration. See ENV_CONFIGURATION.md
 
 **Example: Event Generator**
 ```bash
@@ -390,8 +388,6 @@ ALLOWED_ORIGINS=http://localhost:3000
 
 ## Documentation
 
-- **[QUICK_START.md](QUICK_START.md)** - 30-minute setup guide
-- **[ENV_CONFIGURATION.md](ENV_CONFIGURATION.md)** - Environment variable reference
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Technical deep dive
 
 ---
